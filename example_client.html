@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Signal Client Example</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .container {
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        input {
+            padding: 8px;
+            margin: 5px;
+            width: 200px;
+        }
+        #status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .connected {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .video-container {
+            position: relative;
+            display: inline-block;
+            margin: 10px;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        video {
+            width: 100%;
+            max-width: 400px;
+            border: 3px solid #ddd;
+            margin: 0;
+            display: block;
+            background-color: #000;
+        }
+        #localVideo {
+            border-color: #4CAF50;
+            max-width: 300px;
+        }
+        #remoteVideo {
+            border-color: #2196F3;
+            max-width: 500px;
+        }
+        .video-label {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            z-index: 10;
+        }
+        .video-status {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 10;
+        }
+        .status-active {
+            background-color: rgba(76, 175, 80, 0.9);
+        }
+        .status-inactive {
+            background-color: rgba(244, 67, 54, 0.9);
+        }
+        .videos-wrapper {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: flex-start;
+            gap: 20px;
+        }
+        .connection-indicator {
+            text-align: center;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            font-size: 18px;
+            font-weight: bold;
+            display: none;
+        }
+        .connection-active {
+            background-color: #4CAF50;
+            color: white;
+            display: block;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+    </style>
+</head>
+<body>
+    <h1>WebRTC Signal Client Example</h1>
+    
+    <div class="container">
+        <h2>Подключение</h2>
+        <input type="text" id="clientId" placeholder="Ваш ID (или оставьте пустым)" value="">
+        <input type="text" id="serverUrl" placeholder="ws://localhost/ws" value="">
+        <br>
+        <button id="connectBtn" onclick="connect()">Подключиться</button>
+        <button id="disconnectBtn" onclick="disconnect()" disabled>Отключиться</button>
+        <div id="status" class="disconnected">Отключено</div>
+    </div>
+
+    <div class="container">
+        <h2>Соединение с другим клиентом</h2>
+        <input type="text" id="targetId" placeholder="ID целевого клиента">
+        <br>
+        <button id="callBtn" onclick="startCall()" disabled>Начать звонок</button>
+        <button id="hangupBtn" onclick="hangup()" disabled>Завершить звонок</button>
+        <button id="listBtn" onclick="listClients()" disabled>Список клиентов</button>
+    </div>
+
+    <div class="container">
+        <h2>Видео</h2>
+        <div class="connection-indicator" id="connectionIndicator">
+            ✅ СОЕДИНЕНИЕ УСТАНОВЛЕНО - ВЫ ВИДИТЕ СОБЕСЕДНИКА! ✅
+        </div>
+        <div class="videos-wrapper">
+            <div class="video-container">
+                <video id="localVideo" autoplay muted playsinline></video>
+                <div class="video-label" style="background-color: rgba(76, 175, 80, 0.9);">📹 ВАШЕ ВИДЕО</div>
+                <div class="video-status status-inactive" id="localVideoStatus">Нет потока</div>
+            </div>
+            <div class="video-container">
+                <video id="remoteVideo" autoplay playsinline></video>
+                <div class="video-label" style="background-color: rgba(33, 150, 243, 0.9);">👤 ВИДЕО СОБЕСЕДНИКА</div>
+                <div class="video-status status-inactive" id="remoteVideoStatus">Ожидание...</div>
+            </div>
+        </div>
+        <div style="margin-top: 20px; padding: 10px; background-color: #e3f2fd; border-radius: 4px;">
+            <strong>Как понять, что вы видите собеседника:</strong>
+            <ul style="margin: 10px 0; padding-left: 20px;">
+                <li>Локальное видео (зеленая рамка) - это ВЫ</li>
+                <li>Удаленное видео (синяя рамка) - это СОБЕСЕДНИК</li>
+                <li>Если статус "✓ СОБЕСЕДНИК НА СВЯЗИ" - соединение работает</li>
+                <li>Если видите зеленый индикатор сверху - соединение установлено</li>
+                <li>Попробуйте помахать рукой - если собеседник видит это, значит все работает!</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>Логи</h2>
+        <div id="logs" style="height: 200px; overflow-y: auto; background-color: #f5f5f5; padding: 10px; font-family: monospace; font-size: 12px;"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let pc = null;
+        let localStream = null;
+        let clientId = null;
+        let targetId = null;
+
+        function log(message) {
+            const logs = document.getElementById('logs');
+            const time = new Date().toLocaleTimeString();
+            logs.innerHTML += `[${time}] ${message}<br>`;
+            logs.scrollTop = logs.scrollHeight;
+            console.log(message);
+        }
+
+        function updateLocalVideoStatus(active) {
+            const statusEl = document.getElementById('localVideoStatus');
+            if (active) {
+                statusEl.textContent = '✓ Активно';
+                statusEl.className = 'video-status status-active';
+            } else {
+                statusEl.textContent = 'Нет потока';
+                statusEl.className = 'video-status status-inactive';
+            }
+        }
+
+        function updateRemoteVideoStatus(active) {
+            const statusEl = document.getElementById('remoteVideoStatus');
+            if (active) {
+                statusEl.textContent = '✓ СОБЕСЕДНИК НА СВЯЗИ';
+                statusEl.className = 'video-status status-active';
+            } else {
+                statusEl.textContent = 'Ожидание...';
+                statusEl.className = 'video-status status-inactive';
+            }
+        }
+
+        function checkIfRemoteVideoIsPlaying() {
+            const remoteVideo = document.getElementById('remoteVideo');
+            const localVideo = document.getElementById('localVideo');
+            const indicator = document.getElementById('connectionIndicator');
+            
+            if (remoteVideo.srcObject && remoteVideo.readyState >= 2) {
+                // Проверяем, что это не локальное видео
+                const remoteStream = remoteVideo.srcObject;
+                const localStream = localVideo.srcObject;
+                
+                if (remoteStream && localStream) {
+                    const remoteTracks = remoteStream.getVideoTracks();
+                    const localTracks = localStream.getVideoTracks();
+                    
+                    // Если треки разные, значит это действительно удаленное видео
+                    if (remoteTracks.length > 0 && localTracks.length > 0) {
+                        const isDifferent = remoteTracks[0].id !== localTracks[0].id;
+                        if (isDifferent) {
+                            log('✅ ПОДТВЕРЖДЕНО: Вы видите удаленное видео (не свое)!');
+                            updateRemoteVideoStatus(true);
+                            // Показываем индикатор соединения
+                            if (indicator) {
+                                indicator.className = 'connection-indicator connection-active';
+                            }
+                        } else {
+                            log('⚠️ ВНИМАНИЕ: Возможно, вы видите свое видео вместо удаленного!');
+                            if (indicator) {
+                                indicator.className = 'connection-indicator';
+                            }
+                        }
+                    }
+                }
+                
+                // Проверяем размеры видео
+                if (remoteVideo.videoWidth > 0 && remoteVideo.videoHeight > 0) {
+                    log(`Размер удаленного видео: ${remoteVideo.videoWidth}x${remoteVideo.videoHeight}`);
+                }
+            } else {
+                // Скрываем индикатор, если видео не воспроизводится
+                if (indicator) {
+                    indicator.className = 'connection-indicator';
+                }
+            }
+        }
+
+        function updateStatus(connected) {
+            const status = document.getElementById('status');
+            if (connected) {
+                status.textContent = `Подключено как: ${clientId}`;
+                status.className = 'connected';
+            } else {
+                status.textContent = 'Отключено';
+                status.className = 'disconnected';
+            }
+        }
+
+        async function connect() {
+            // Автоматическое определение WebSocket URL
+            let serverUrl = document.getElementById('serverUrl').value.trim();
+            if (!serverUrl) {
+                // Определяем протокол и хост автоматически
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const host = window.location.host;
+                serverUrl = `${protocol}//${host}/ws`;
+            }
+            const inputClientId = document.getElementById('clientId').value.trim();
+            
+            try {
+                ws = new WebSocket(serverUrl);
+                
+                ws.onopen = () => {
+                    log('WebSocket подключен');
+                    // Регистрация клиента
+                    ws.send(JSON.stringify({
+                        type: 'register',
+                        client_id: inputClientId || undefined
+                    }));
+                };
+
+                ws.onmessage = async (event) => {
+                    const data = JSON.parse(event.data);
+                    log(`Получено: ${data.type}`);
+
+                    if (data.type === 'registered') {
+                        clientId = data.client_id;
+                        updateStatus(true);
+                        document.getElementById('connectBtn').disabled = true;
+                        document.getElementById('disconnectBtn').disabled = false;
+                        document.getElementById('callBtn').disabled = false;
+                        document.getElementById('listBtn').disabled = false;
+                        log(`Зарегистрирован как: ${clientId}`);
+                    } else if (data.type === 'client-list') {
+                        log(`Доступные клиенты: ${data.clients.join(', ') || 'нет'}`);
+                        if (data.clients.length > 0) {
+                            document.getElementById('targetId').value = data.clients[0];
+                        }
+                    } else if (data.type === 'offer') {
+                        await handleOffer(data.offer, data.from);
+                    } else if (data.type === 'answer') {
+                        await handleAnswer(data.answer);
+                    } else if (data.type === 'ice-candidate') {
+                        await handleIceCandidate(data.candidate);
+                    } else if (data.type === 'error') {
+                        log(`Ошибка: ${data.message}`);
+                        alert(`Ошибка: ${data.message}`);
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    log(`WebSocket ошибка: ${error}`);
+                };
+
+                ws.onclose = () => {
+                    log('WebSocket отключен');
+                    updateStatus(false);
+                    document.getElementById('connectBtn').disabled = false;
+                    document.getElementById('disconnectBtn').disabled = true;
+                    document.getElementById('callBtn').disabled = true;
+                    document.getElementById('listBtn').disabled = true;
+                };
+
+            } catch (error) {
+                log(`Ошибка подключения: ${error}`);
+                alert(`Ошибка подключения: ${error}`);
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            clientId = null;
+            updateStatus(false);
+            updateLocalVideoStatus(false);
+            updateRemoteVideoStatus(false);
+        }
+
+        async function startCall() {
+            targetId = document.getElementById('targetId').value.trim();
+            if (!targetId) {
+                alert('Введите ID целевого клиента');
+                return;
+            }
+
+            try {
+                // Получаем локальный медиа поток
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    },
+                    audio: true
+                });
+                
+                log(`Получен локальный поток: ${localStream.getVideoTracks().length} видео треков, ${localStream.getAudioTracks().length} аудио треков`);
+                
+                const localVideo = document.getElementById('localVideo');
+                localVideo.srcObject = localStream;
+                
+                // Обновляем статус локального видео
+                updateLocalVideoStatus(true);
+                
+                // Проверяем, что видео действительно воспроизводится
+                localVideo.onloadedmetadata = () => {
+                    log(`Локальное видео загружено: ${localVideo.videoWidth}x${localVideo.videoHeight}`);
+                };
+                
+                localVideo.onplay = () => {
+                    log('Локальное видео воспроизводится');
+                    updateLocalVideoStatus(true);
+                };
+
+                // Создаем RTCPeerConnection
+                pc = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' }
+                    ]
+                });
+
+                // Добавляем локальные треки
+                localStream.getTracks().forEach(track => {
+                    pc.addTrack(track, localStream);
+                });
+
+                // Обработка удаленных треков
+                pc.ontrack = (event) => {
+                    log(`Получен трек: ${event.track.kind}, streams: ${event.streams.length}`);
+                    console.log('Track event:', event);
+                    
+                    // Создаем новый поток, если его нет
+                    let remoteStream = null;
+                    if (event.streams && event.streams.length > 0) {
+                        remoteStream = event.streams[0];
+                    } else {
+                        // Создаем новый поток из трека
+                        remoteStream = new MediaStream([event.track]);
+                    }
+                    
+                    const remoteVideo = document.getElementById('remoteVideo');
+                    if (remoteVideo.srcObject) {
+                        // Если уже есть поток, добавляем трек к нему
+                        const existingStream = remoteVideo.srcObject;
+                        existingStream.addTrack(event.track);
+                        log('Добавлен трек к существующему потоку');
+                    } else {
+                        // Устанавливаем новый поток
+                        remoteVideo.srcObject = remoteStream;
+                        log('✅ УСТАНОВЛЕН УДАЛЕННЫЙ ВИДЕО ПОТОК - ВЫ ВИДИТЕ СОБЕСЕДНИКА!');
+                        updateRemoteVideoStatus(true);
+                    }
+                    
+                    // Обновляем статус при воспроизведении
+                    remoteVideo.onplay = () => {
+                        log('✅ Удаленное видео воспроизводится - ВЫ ВИДИТЕ СОБЕСЕДНИКА!');
+                        updateRemoteVideoStatus(true);
+                        // Проверяем, что это действительно удаленное видео (не локальное)
+                        checkIfRemoteVideoIsPlaying();
+                    };
+                    
+                    remoteVideo.onloadedmetadata = () => {
+                        log(`Удаленное видео загружено: ${remoteVideo.videoWidth}x${remoteVideo.videoHeight}`);
+                        updateRemoteVideoStatus(true);
+                        checkIfRemoteVideoIsPlaying();
+                    };
+                    
+                    remoteVideo.onplaying = () => {
+                        log('✅✅✅ УДАЛЕННОЕ ВИДЕО ИГРАЕТ - ВЫ ВИДИТЕ СОБЕСЕДНИКА! ✅✅✅');
+                        updateRemoteVideoStatus(true);
+                        checkIfRemoteVideoIsPlaying();
+                    };
+                    
+                    remoteVideo.onpause = () => {
+                        log('Удаленное видео приостановлено');
+                        updateRemoteVideoStatus(false);
+                    };
+                    
+                    // Обработка состояния трека
+                    event.track.onended = () => {
+                        log(`Трек ${event.track.kind} завершен`);
+                        updateRemoteVideoStatus(false);
+                    };
+                    
+                    event.track.onmute = () => {
+                        log(`Трек ${event.track.kind} приглушен`);
+                    };
+                    
+                    event.track.onunmute = () => {
+                        log(`Трек ${event.track.kind} включен`);
+                    };
+                };
+
+                // Обработка ICE кандидатов
+                pc.onicecandidate = (event) => {
+                    if (event.candidate && targetId) {
+                        ws.send(JSON.stringify({
+                            type: 'ice-candidate',
+                            target_id: targetId,
+                            candidate: event.candidate
+                        }));
+                        log(`Отправлен ICE кандидат: ${event.candidate.candidate}`);
+                    }
+                };
+
+                // Обработка изменения состояния соединения
+                pc.onconnectionstatechange = () => {
+                    log(`Состояние соединения: ${pc.connectionState}`);
+                };
+
+                pc.oniceconnectionstatechange = () => {
+                    log(`ICE состояние соединения: ${pc.iceConnectionState}`);
+                };
+
+                // Создаем offer
+                const offer = await pc.createOffer();
+                await pc.setLocalDescription(offer);
+
+                // Отправляем offer через сигнальный сервер
+                ws.send(JSON.stringify({
+                    type: 'offer',
+                    target_id: targetId,
+                    offer: offer
+                }));
+
+                log(`Отправлен offer для ${targetId}`);
+                document.getElementById('callBtn').disabled = true;
+                document.getElementById('hangupBtn').disabled = false;
+
+            } catch (error) {
+                log(`Ошибка начала звонка: ${error.name} - ${error.message}`);
+                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    alert('Доступ к камере/микрофону запрещен. Пожалуйста, разрешите доступ и попробуйте снова.');
+                } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+                    alert('Камера или микрофон не найдены. Убедитесь, что устройства подключены.');
+                } else {
+                    alert(`Ошибка: ${error.message}`);
+                }
+                console.error('Ошибка начала звонка:', error);
+            }
+        }
+
+        async function handleOffer(offer, from) {
+            try {
+                targetId = from;
+                log(`Получен offer от ${from}`);
+
+                // Получаем локальный медиа поток если еще не получен
+                if (!localStream) {
+                    localStream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            width: { ideal: 1280 },
+                            height: { ideal: 720 }
+                        },
+                        audio: true
+                    });
+                    
+                    log(`Получен локальный поток: ${localStream.getVideoTracks().length} видео треков, ${localStream.getAudioTracks().length} аудио треков`);
+                    
+                    const localVideo = document.getElementById('localVideo');
+                    localVideo.srcObject = localStream;
+                    
+                    // Обновляем статус локального видео
+                    updateLocalVideoStatus(true);
+                    
+                    localVideo.onloadedmetadata = () => {
+                        log(`Локальное видео загружено: ${localVideo.videoWidth}x${localVideo.videoHeight}`);
+                    };
+                    
+                    localVideo.onplay = () => {
+                        log('Локальное видео воспроизводится');
+                        updateLocalVideoStatus(true);
+                    };
+                }
+
+                // Создаем RTCPeerConnection
+                pc = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' }
+                    ]
+                });
+
+                // Добавляем локальные треки
+                localStream.getTracks().forEach(track => {
+                    pc.addTrack(track, localStream);
+                });
+
+                // Обработка удаленных треков
+                pc.ontrack = (event) => {
+                    log(`Получен трек: ${event.track.kind}, streams: ${event.streams.length}`);
+                    console.log('Track event:', event);
+                    
+                    // Создаем новый поток, если его нет
+                    let remoteStream = null;
+                    if (event.streams && event.streams.length > 0) {
+                        remoteStream = event.streams[0];
+                    } else {
+                        // Создаем новый поток из трека
+                        remoteStream = new MediaStream([event.track]);
+                    }
+                    
+                    const remoteVideo = document.getElementById('remoteVideo');
+                    if (remoteVideo.srcObject) {
+                        // Если уже есть поток, добавляем трек к нему
+                        const existingStream = remoteVideo.srcObject;
+                        existingStream.addTrack(event.track);
+                        log('Добавлен трек к существующему потоку');
+                    } else {
+                        // Устанавливаем новый поток
+                        remoteVideo.srcObject = remoteStream;
+                        log('✅ УСТАНОВЛЕН УДАЛЕННЫЙ ВИДЕО ПОТОК - ВЫ ВИДИТЕ СОБЕСЕДНИКА!');
+                        updateRemoteVideoStatus(true);
+                    }
+                    
+                    // Обновляем статус при воспроизведении
+                    remoteVideo.onplay = () => {
+                        log('✅ Удаленное видео воспроизводится - ВЫ ВИДИТЕ СОБЕСЕДНИКА!');
+                        updateRemoteVideoStatus(true);
+                        // Проверяем, что это действительно удаленное видео (не локальное)
+                        checkIfRemoteVideoIsPlaying();
+                    };
+                    
+                    remoteVideo.onloadedmetadata = () => {
+                        log(`Удаленное видео загружено: ${remoteVideo.videoWidth}x${remoteVideo.videoHeight}`);
+                        updateRemoteVideoStatus(true);
+                        checkIfRemoteVideoIsPlaying();
+                    };
+                    
+                    remoteVideo.onplaying = () => {
+                        log('✅✅✅ УДАЛЕННОЕ ВИДЕО ИГРАЕТ - ВЫ ВИДИТЕ СОБЕСЕДНИКА! ✅✅✅');
+                        updateRemoteVideoStatus(true);
+                        checkIfRemoteVideoIsPlaying();
+                    };
+                    
+                    remoteVideo.onpause = () => {
+                        log('Удаленное видео приостановлено');
+                        updateRemoteVideoStatus(false);
+                    };
+                    
+                    // Обработка состояния трека
+                    event.track.onended = () => {
+                        log(`Трек ${event.track.kind} завершен`);
+                        updateRemoteVideoStatus(false);
+                    };
+                    
+                    event.track.onmute = () => {
+                        log(`Трек ${event.track.kind} приглушен`);
+                    };
+                    
+                    event.track.onunmute = () => {
+                        log(`Трек ${event.track.kind} включен`);
+                    };
+                };
+
+                // Обработка ICE кандидатов
+                pc.onicecandidate = (event) => {
+                    if (event.candidate && targetId) {
+                        ws.send(JSON.stringify({
+                            type: 'ice-candidate',
+                            target_id: targetId,
+                            candidate: event.candidate
+                        }));
+                        log(`Отправлен ICE кандидат: ${event.candidate.candidate}`);
+                    }
+                };
+
+                // Обработка изменения состояния соединения
+                pc.onconnectionstatechange = () => {
+                    log(`Состояние соединения: ${pc.connectionState}`);
+                };
+
+                pc.oniceconnectionstatechange = () => {
+                    log(`ICE состояние соединения: ${pc.iceConnectionState}`);
+                };
+
+                // Устанавливаем удаленное описание
+                await pc.setRemoteDescription(new RTCSessionDescription(offer));
+                log('Установлено удаленное описание (offer)');
+
+                // Добавляем отложенные ICE кандидаты, если есть
+                if (pc.pendingIceCandidates) {
+                    for (const candidate of pc.pendingIceCandidates) {
+                        try {
+                            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                            log('Добавлен отложенный ICE кандидат');
+                        } catch (e) {
+                            log(`Ошибка добавления отложенного кандидата: ${e}`);
+                        }
+                    }
+                    pc.pendingIceCandidates = [];
+                }
+
+                // Создаем answer
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+
+                // Отправляем answer через сигнальный сервер
+                ws.send(JSON.stringify({
+                    type: 'answer',
+                    target_id: targetId,
+                    answer: answer
+                }));
+
+                log(`Отправлен answer для ${targetId}`);
+                document.getElementById('hangupBtn').disabled = false;
+
+            } catch (error) {
+                log(`Ошибка обработки offer: ${error.name} - ${error.message}`);
+                if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+                    alert('Доступ к камере/микрофону запрещен. Пожалуйста, разрешите доступ и попробуйте снова.');
+                } else if (error.name === 'NotFoundError' || error.name === 'DevicesNotFoundError') {
+                    alert('Камера или микрофон не найдены. Убедитесь, что устройства подключены.');
+                } else {
+                    alert(`Ошибка: ${error.message}`);
+                }
+                console.error('Ошибка обработки offer:', error);
+            }
+        }
+
+        async function handleAnswer(answer) {
+            try {
+                log('Получен answer');
+                if (!pc) {
+                    log('Ошибка: RTCPeerConnection не создан');
+                    return;
+                }
+                await pc.setRemoteDescription(new RTCSessionDescription(answer));
+                log('Установлено удаленное описание (answer)');
+                
+                // Добавляем отложенные ICE кандидаты, если есть
+                if (pc.pendingIceCandidates) {
+                    for (const candidate of pc.pendingIceCandidates) {
+                        try {
+                            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                            log('Добавлен отложенный ICE кандидат');
+                        } catch (e) {
+                            log(`Ошибка добавления отложенного кандидата: ${e}`);
+                        }
+                    }
+                    pc.pendingIceCandidates = [];
+                }
+            } catch (error) {
+                log(`Ошибка обработки answer: ${error}`);
+            }
+        }
+
+        async function handleIceCandidate(candidate) {
+            try {
+                if (!pc) {
+                    log('Ошибка: RTCPeerConnection не создан для ICE кандидата');
+                    return;
+                }
+                // Проверяем, что remote description установлен
+                if (pc.remoteDescription) {
+                    await pc.addIceCandidate(new RTCIceCandidate(candidate));
+                    log('Добавлен ICE кандидат');
+                } else {
+                    log('Отложен ICE кандидат (ожидание remote description)');
+                    // Сохраняем кандидата для добавления позже
+                    if (!pc.pendingIceCandidates) {
+                        pc.pendingIceCandidates = [];
+                    }
+                    pc.pendingIceCandidates.push(candidate);
+                }
+            } catch (error) {
+                log(`Ошибка добавления ICE кандидата: ${error}`);
+            }
+        }
+
+        function listClients() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'list-clients'
+                }));
+                log('Запрос списка клиентов отправлен');
+            } else {
+                log('WebSocket не подключен');
+            }
+        }
+
+        function hangup() {
+            if (pc) {
+                pc.close();
+                pc = null;
+            }
+            if (localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+                localStream = null;
+            }
+            document.getElementById('localVideo').srcObject = null;
+            document.getElementById('remoteVideo').srcObject = null;
+            updateLocalVideoStatus(false);
+            updateRemoteVideoStatus(false);
+            document.getElementById('connectionIndicator').className = 'connection-indicator';
+            document.getElementById('callBtn').disabled = false;
+            document.getElementById('hangupBtn').disabled = true;
+            targetId = null;
+            log('Звонок завершен');
+        }
+    </script>
+</body>
+</html>

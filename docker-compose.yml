@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  signal-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: webrtc-signal-server
+    restart: unless-stopped
+    ports:
+      - "${SIGNAL_PORT:-8765}:8765"
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - webrtc-network
+    healthcheck:
+      # Проверка доступности порта (не WebSocket handshake, чтобы избежать ошибок)
+      test: ["CMD", "python", "-c", "import socket; s = socket.socket(); result = s.connect_ex(('localhost', 8765)); s.close(); exit(0 if result == 0 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+
+  nginx:
+    image: nginx:alpine
+    container_name: webrtc-nginx
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./example_client.html:/usr/share/nginx/html/index.html:ro
+      - ./viewer.html:/usr/share/nginx/html/viewer.html:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - signal-server
+    networks:
+      - webrtc-network
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  webrtc-network:
+    driver: bridge

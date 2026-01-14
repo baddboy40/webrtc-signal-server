@@ -1,0 +1,978 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Viewer - GStreamer Stream</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 30px;
+            max-width: 900px;
+            width: 100%;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 12px 24px;
+            font-size: 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+
+        button:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .btn-connect {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-disconnect {
+            background: #e74c3c;
+            color: white;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .status.disconnected {
+            background: #fee;
+            color: #c33;
+        }
+
+        .status.connecting {
+            background: #ffeaa7;
+            color: #d63031;
+        }
+
+        .status.connected {
+            background: #d5f4e6;
+            color: #00b894;
+        }
+
+        .video-wrapper {
+            position: relative;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 20px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+        }
+
+        video {
+            width: 100%;
+            height: auto;
+            display: block;
+            min-height: 400px;
+            background: #000;
+        }
+
+        .video-overlay {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            z-index: 10;
+        }
+
+        .video-overlay.active {
+            background: rgba(0, 184, 148, 0.9);
+        }
+
+        .video-overlay.inactive {
+            background: rgba(231, 76, 60, 0.9);
+        }
+
+        .stats {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            color: #555;
+        }
+
+        .stats-item {
+            margin: 5px 0;
+        }
+
+        .server-input {
+            margin-bottom: 15px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .server-input label {
+            font-weight: 600;
+            color: #555;
+        }
+
+        .server-input input {
+            padding: 10px 15px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 14px;
+            min-width: 200px;
+            transition: border-color 0.3s ease;
+        }
+
+        .server-input input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .logs {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 20px;
+        }
+
+        .log-entry {
+            margin: 3px 0;
+            padding: 2px 0;
+        }
+
+        .log-entry.error {
+            color: #f48771;
+        }
+
+        .log-entry.success {
+            color: #4ec9b0;
+        }
+
+        .log-entry.info {
+            color: #569cd6;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+            }
+
+            video {
+                min-height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 WebRTC Viewer</h1>
+        <p class="subtitle">Просмотр потока от GStreamer</p>
+
+        <div class="server-input">
+            <label for="serverUrl">WebSocket сервер:</label>
+            <input type="text" id="serverUrl" placeholder="ws://localhost:8765" value="ws://localhost:8765">
+        </div>
+
+        <div class="controls">
+            <button id="connectBtn" class="btn-connect" onclick="connect()">Подключиться</button>
+            <button id="disconnectBtn" class="btn-disconnect" onclick="disconnect()" disabled>Отключиться</button>
+        </div>
+
+        <div id="status" class="status disconnected">Отключено</div>
+
+        <div class="video-wrapper">
+            <video id="video" autoplay playsinline></video>
+            <div id="videoOverlay" class="video-overlay inactive">Нет потока</div>
+        </div>
+
+        <div class="stats">
+            <div class="stats-item"><strong>Статус соединения:</strong> <span id="connectionState">-</span></div>
+            <div class="stats-item"><strong>ICE состояние:</strong> <span id="iceState">-</span></div>
+            <div class="stats-item"><strong>Получено кадров:</strong> <span id="framesReceived">0</span></div>
+            <div class="stats-item"><strong>Получено данных:</strong> <span id="bytesReceived">0 KB</span></div>
+        </div>
+
+        <div class="logs" id="logs"></div>
+    </div>
+
+    <script>
+        let websocket = null;
+        let peerConnection = null;
+        let statsInterval = null;
+        let framesReceived = 0;
+        let bytesReceived = 0;
+        let reconnectAttempts = 0;
+        let maxReconnectAttempts = 5;
+        let reconnectDelay = 3000; // 3 секунды
+        let reconnectTimeout = null;
+        let isManualDisconnect = false;
+        let clientId = null;
+        let playPromise = null; // Для отслеживания текущего play() запроса
+        let isPlaying = false; // Флаг для отслеживания состояния воспроизведения
+
+        const video = document.getElementById('video');
+        const connectBtn = document.getElementById('connectBtn');
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        const statusEl = document.getElementById('status');
+        const videoOverlay = document.getElementById('videoOverlay');
+        const connectionStateEl = document.getElementById('connectionState');
+        const iceStateEl = document.getElementById('iceState');
+        const framesReceivedEl = document.getElementById('framesReceived');
+        const bytesReceivedEl = document.getElementById('bytesReceived');
+        const logsEl = document.getElementById('logs');
+
+        // Определяем URL WebSocket сервера
+        function getWebSocketUrl() {
+            const input = document.getElementById('serverUrl');
+            const url = input.value.trim();
+            
+            if (url) {
+                return url;
+            }
+            
+            // Проверяем параметр URL для порта WebSocket
+            const urlParams = new URLSearchParams(window.location.search);
+            const wsPort = urlParams.get('ws_port') || '8765';
+            const wsHost = urlParams.get('ws_host') || 'localhost';
+            
+            // Используем ws:// для локального подключения
+            return `ws://${wsHost}:${wsPort}`;
+        }
+
+        function log(message, type = 'info') {
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${time}] ${message}`;
+            logsEl.appendChild(entry);
+            logsEl.scrollTop = logsEl.scrollHeight;
+            console.log(`[${type.toUpperCase()}] ${message}`);
+        }
+
+        function updateStatus(text, className) {
+            statusEl.textContent = text;
+            statusEl.className = `status ${className}`;
+        }
+
+        function updateVideoOverlay(text, active) {
+            videoOverlay.textContent = text;
+            videoOverlay.className = `video-overlay ${active ? 'active' : 'inactive'}`;
+        }
+
+        async function connect() {
+            // Отменяем предыдущую попытку переподключения, если есть
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+                reconnectTimeout = null;
+            }
+            
+            const wsUrl = getWebSocketUrl();
+            log(`Подключение к ${wsUrl}...`, 'info');
+            isManualDisconnect = false; // Сбрасываем флаг ручного отключения
+
+            // Отключаем поле ввода и кнопку подключения
+            document.getElementById('serverUrl').disabled = true;
+            connectBtn.disabled = true;
+
+            try {
+                websocket = new WebSocket(wsUrl);
+
+                websocket.onopen = () => {
+                    log('WebSocket подключен', 'success');
+                    updateStatus('Подключение к серверу...', 'connecting');
+                    reconnectAttempts = 0; // Сбрасываем счетчик переподключений
+                    
+                    // Регистрируемся как клиент (используем тот же ID при переподключении)
+                    if (!clientId) {
+                        clientId = 'viewer-' + Date.now();
+                    }
+                    websocket.send(JSON.stringify({
+                        type: 'register',
+                        client_id: clientId
+                    }));
+                };
+
+                websocket.onmessage = async (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+
+                        if (data.type === 'registered') {
+                            log(`Зарегистрирован как: ${data.client_id}`, 'success');
+                            updateStatus('Зарегистрирован. Установка соединения...', 'connecting');
+                            await startWebRTC();
+                        } else if (data.type === 'offer') {
+                            await handleOffer(data.offer, data.from);
+                        } else if (data.type === 'answer') {
+                            await handleAnswer(data.answer);
+                        } else if (data.type === 'ice-candidate') {
+                            await handleIceCandidate(data.candidate);
+                        } else if (data.type === 'error') {
+                            log(`Ошибка: ${data.message}`, 'error');
+                            updateStatus(`Ошибка: ${data.message}`, 'disconnected');
+                        }
+                    } catch (error) {
+                        log(`Ошибка обработки сообщения: ${error.message}`, 'error');
+                    }
+                };
+
+                websocket.onerror = (error) => {
+                    log(`WebSocket ошибка: Не удалось подключиться к серверу. Убедитесь, что сигнальный сервер запущен на порту 8765`, 'error');
+                    updateStatus('Ошибка подключения к серверу', 'disconnected');
+                    document.getElementById('serverUrl').disabled = false;
+                    connectBtn.disabled = false;
+                };
+
+                websocket.onclose = (event) => {
+                    if (event.code !== 1000) {
+                        if (event.code === 1006) {
+                            log('WebSocket отключен. Возможно, сервер не запущен', 'error');
+                        } else {
+                            log(`WebSocket отключен (код: ${event.code})`, 'error');
+                        }
+                    }
+                    
+                    // Очистка peerConnection при разрыве WebSocket
+                    if (peerConnection) {
+                        try {
+                            peerConnection.getTransceivers().forEach(transceiver => {
+                                if (transceiver.sender && transceiver.sender.track) {
+                                    transceiver.sender.track.stop();
+                                }
+                                if (transceiver.receiver && transceiver.receiver.track) {
+                                    transceiver.receiver.track.stop();
+                                }
+                            });
+                            peerConnection.close();
+                        } catch (e) {
+                            // Игнорируем ошибки при очистке
+                        }
+                        peerConnection = null;
+                    }
+                    
+                    // Очищаем видео элемент
+                    if (video.srcObject) {
+                        const stream = video.srcObject;
+                        stream.getTracks().forEach(track => {
+                            track.stop();
+                        });
+                        video.srcObject = null;
+                    }
+                    
+                    updateStatus('Отключено', 'disconnected');
+                    updateVideoOverlay('Нет потока', false);
+                    stopStats();
+                    
+                    // Автоматическое переподключение, если это не было ручное отключение
+                    if (!isManualDisconnect && reconnectAttempts < maxReconnectAttempts) {
+                        reconnectAttempts++;
+                        const delay = reconnectDelay * reconnectAttempts; // Экспоненциальная задержка
+                        log(`Попытка переподключения ${reconnectAttempts}/${maxReconnectAttempts} через ${delay/1000} сек...`, 'info');
+                        updateStatus(`Переподключение через ${delay/1000} сек...`, 'connecting');
+                        
+                        reconnectTimeout = setTimeout(() => {
+                            log(`Переподключение (попытка ${reconnectAttempts})...`, 'info');
+                            connect();
+                        }, delay);
+                    } else if (!isManualDisconnect) {
+                        log(`Достигнуто максимальное количество попыток переподключения (${maxReconnectAttempts})`, 'error');
+                        updateStatus('Не удалось переподключиться', 'disconnected');
+                        document.getElementById('serverUrl').disabled = false;
+                        connectBtn.disabled = false;
+                        disconnectBtn.disabled = true;
+                    } else {
+                        // Ручное отключение
+                        document.getElementById('serverUrl').disabled = false;
+                        connectBtn.disabled = false;
+                        disconnectBtn.disabled = true;
+                    }
+                };
+
+            } catch (error) {
+                log(`Ошибка подключения: ${error.message}`, 'error');
+                updateStatus(`Ошибка: ${error.message}`, 'disconnected');
+                document.getElementById('serverUrl').disabled = false;
+                connectBtn.disabled = false;
+            }
+        }
+
+        async function startWebRTC() {
+            try {
+                // Полная очистка предыдущего соединения
+                if (peerConnection) {
+                    log('Очистка предыдущего соединения...', 'info');
+                    
+                    // Закрываем все трансиверы
+                    peerConnection.getTransceivers().forEach(transceiver => {
+                        if (transceiver.sender && transceiver.sender.track) {
+                            transceiver.sender.track.stop();
+                        }
+                        if (transceiver.receiver && transceiver.receiver.track) {
+                            transceiver.receiver.track.stop();
+                        }
+                    });
+                    
+                    // Закрываем соединение
+                    peerConnection.close();
+                    peerConnection = null;
+                    
+                    // Ждем немного для завершения очистки
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                
+                // Очищаем видео элемент
+                if (video.srcObject) {
+                    const oldStream = video.srcObject;
+                    oldStream.getTracks().forEach(track => {
+                        track.stop();
+                        log(`Остановлен старый трек: ${track.kind}`, 'info');
+                    });
+                    video.srcObject = null;
+                }
+                
+                // Сбрасываем флаги воспроизведения
+                isPlaying = false;
+                if (playPromise) {
+                    playPromise.catch(() => {}); // Игнорируем отмену
+                    playPromise = null;
+                }
+                
+                // Сбрасываем состояние соединения в UI
+                connectionStateEl.textContent = '-';
+                iceStateEl.textContent = '-';
+                
+                // Создаем новое RTCPeerConnection
+                peerConnection = new RTCPeerConnection({
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' }
+                    ]
+                });
+
+                // Обработка получения видеопотока
+                let remoteStream = null;
+                peerConnection.ontrack = (event) => {
+                    // Создаем новый поток для каждого переподключения
+                    if (!remoteStream) {
+                        remoteStream = new MediaStream();
+                        video.srcObject = remoteStream;
+                    }
+                    
+                    // Добавляем трек к потоку
+                    let trackAdded = false;
+                    if (event.streams && event.streams.length > 0) {
+                        const stream = event.streams[0];
+                        stream.getTracks().forEach(track => {
+                            if (!remoteStream.getTracks().some(t => t.id === track.id)) {
+                                remoteStream.addTrack(track);
+                                trackAdded = true;
+                                track.enabled = true;
+                            }
+                        });
+                    } else if (event.track) {
+                        if (!remoteStream.getTracks().some(t => t.id === event.track.id)) {
+                            remoteStream.addTrack(event.track);
+                            trackAdded = true;
+                            event.track.enabled = true;
+                        }
+                    }
+                    
+                    // Добавляем обработчики событий для треков
+                    event.track.onended = () => {
+                        log(`Трек ${event.track.kind} завершен`, 'info');
+                    };
+                    
+                    event.track.onmute = () => {
+                        if (event.track.kind === 'video') {
+                            // Включаем трек при mute событии
+                            setTimeout(() => {
+                                if (event.track.muted && peerConnection) {
+                                    const state = peerConnection.connectionState;
+                                    const iceState = peerConnection.iceConnectionState;
+                                    if ((state === 'connected' || state === 'connecting') && 
+                                        (iceState === 'connected' || iceState === 'completed')) {
+                                        event.track.enabled = true;
+                                    }
+                                }
+                            }, 100);
+                        }
+                    };
+                    
+                    // Убеждаемся, что видео трек включен
+                    if (event.track.kind === 'video' && trackAdded) {
+                        event.track.enabled = true;
+                        
+                        // Проверяем и исправляем muted состояние после установки соединения
+                        const checkAndFixMuted = (attempt = 0) => {
+                            if (attempt < 5 && peerConnection) {
+                                setTimeout(() => {
+                                    const state = peerConnection.connectionState;
+                                    const iceState = peerConnection.iceConnectionState;
+                                    
+                                    // Ждем установки соединения
+                                    if (state === 'new' || iceState === 'new' || iceState === 'checking') {
+                                        checkAndFixMuted(attempt + 1);
+                                        return;
+                                    }
+                                    
+                                    // Если соединение установлено, проверяем и исправляем muted
+                                    if ((state === 'connected' || state === 'connecting') && 
+                                        (iceState === 'connected' || iceState === 'completed')) {
+                                        if (event.track.muted || !event.track.enabled) {
+                                            event.track.enabled = true;
+                                            checkAndFixMuted(attempt + 1);
+                                        }
+                                    } else if (state === 'failed' || iceState === 'failed') {
+                                        return;
+                                    } else {
+                                        checkAndFixMuted(attempt + 1);
+                                    }
+                                }, 500 * (attempt + 1));
+                            }
+                        };
+                        checkAndFixMuted();
+                    }
+                    
+                    // Проверяем наличие видео треков и запускаем воспроизведение
+                    const videoTracks = remoteStream.getVideoTracks();
+                    if (videoTracks.length > 0) {
+                        updateVideoOverlay('Поток активен', true);
+                        log('Видеопоток установлен', 'success');
+                        updateStatus('Соединение установлено', 'connected');
+                        
+                        // Запускаем воспроизведение
+                        setTimeout(() => {
+                            if (!isPlaying && (video.paused || video.ended)) {
+                                const videoTrack = videoTracks[0];
+                                if (videoTrack && !videoTrack.enabled) {
+                                    videoTrack.enabled = true;
+                                }
+                                
+                                if (playPromise) {
+                                    playPromise.catch(() => {});
+                                }
+                                
+                                playPromise = video.play();
+                                playPromise.then(() => {
+                                    isPlaying = true;
+                                    playPromise = null;
+                                }).catch(err => {
+                                    if (!err.message.includes('interrupted by a new load request')) {
+                                        log(`Ошибка воспроизведения: ${err.message}`, 'error');
+                                    }
+                                    isPlaying = false;
+                                    playPromise = null;
+                                });
+                            }
+                        }, 200);
+                    }
+                };
+
+                // Обработка ICE кандидатов
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate && websocket && websocket.readyState === WebSocket.OPEN) {
+                        websocket.send(JSON.stringify({
+                            type: 'ice-candidate',
+                            target_id: 'gstreamer-sender',
+                            candidate: {
+                                candidate: event.candidate.candidate,
+                                sdpMLineIndex: event.candidate.sdpMLineIndex,
+                                sdpMid: event.candidate.sdpMid
+                            }
+                        }));
+                    }
+                };
+
+                // Отслеживание состояния соединения
+                peerConnection.onconnectionstatechange = () => {
+                    const state = peerConnection.connectionState;
+                    connectionStateEl.textContent = state;
+                    
+                    if (state === 'connected') {
+                        updateStatus('Соединение установлено', 'connected');
+                        startStats();
+                    } else if (state === 'connecting') {
+                        updateStatus('Установка соединения...', 'connecting');
+                    } else if (state === 'disconnected' || state === 'failed') {
+                        updateStatus('Соединение потеряно', 'disconnected');
+                        updateVideoOverlay('Нет потока', false);
+                        stopStats();
+                    }
+                };
+
+                peerConnection.oniceconnectionstatechange = () => {
+                    const state = peerConnection.iceConnectionState;
+                    iceStateEl.textContent = state;
+                    
+                    // При установке ICE соединения включаем видео треки
+                    if (state === 'connected' || state === 'completed') {
+                        setTimeout(() => {
+                            if (video.srcObject) {
+                                const stream = video.srcObject;
+                                stream.getVideoTracks().forEach(track => {
+                                    if (track.muted || !track.enabled) {
+                                        track.enabled = true;
+                                    }
+                                });
+                            }
+                        }, 500);
+                    } else if (state === 'failed') {
+                        log('ICE соединение не удалось установить', 'error');
+                    }
+                };
+
+                // Убеждаемся, что соединение в правильном состоянии перед созданием offer
+                if (peerConnection.signalingState !== 'stable') {
+                    log(`Предупреждение: signalingState = ${peerConnection.signalingState}, ожидаем stable`, 'info');
+                    // Ждем стабильного состояния
+                    await new Promise(resolve => {
+                        const checkState = () => {
+                            if (peerConnection.signalingState === 'stable') {
+                                resolve();
+                            } else {
+                                setTimeout(checkState, 100);
+                            }
+                        };
+                        checkState();
+                    });
+                }
+                
+                // Создаем offer для получения потока
+                log('Создание offer...', 'info');
+                const offer = await peerConnection.createOffer({
+                    offerToReceiveVideo: true,
+                    offerToReceiveAudio: true
+                });
+
+                log('Установка local description (offer)...', 'info');
+                await peerConnection.setLocalDescription(offer);
+                log(`Local description установлен, signalingState: ${peerConnection.signalingState}`, 'info');
+
+                // Отправляем offer отправителю (GStreamer)
+                if (websocket && websocket.readyState === WebSocket.OPEN) {
+                    websocket.send(JSON.stringify({
+                        type: 'offer',
+                        target_id: 'gstreamer-sender',
+                        offer: offer
+                    }));
+                    log('Отправлен offer для получения потока', 'success');
+                } else {
+                    log('Ошибка: WebSocket не готов для отправки offer', 'error');
+                }
+                
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+
+            } catch (error) {
+                log(`Ошибка WebRTC: ${error.message}`, 'error');
+                updateStatus(`Ошибка: ${error.message}`, 'disconnected');
+            }
+        }
+
+        async function handleOffer(offer, from) {
+            log(`Получен offer от ${from}`, 'info');
+            // Обычно клиент не должен получать offer, но на случай если нужно
+            if (peerConnection) {
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            }
+        }
+
+        async function handleAnswer(answer) {
+            try {
+                if (!peerConnection) {
+                    log('Ошибка: RTCPeerConnection не создан', 'error');
+                    return;
+                }
+                
+                if (!answer || !answer.sdp) {
+                    log('Ошибка: answer не содержит SDP', 'error');
+                    return;
+                }
+                
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+                log('Установлено удаленное описание (answer)', 'success');
+                
+                // Добавляем отложенные ICE кандидаты
+                if (peerConnection.pendingIceCandidates && peerConnection.pendingIceCandidates.length > 0) {
+                    for (const candidate of peerConnection.pendingIceCandidates) {
+                        try {
+                            await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                        } catch (e) {
+                            // Игнорируем ошибки добавления отложенных кандидатов
+                        }
+                    }
+                    peerConnection.pendingIceCandidates = [];
+                }
+                
+            } catch (error) {
+                log(`Ошибка обработки answer: ${error.message}`, 'error');
+            }
+        }
+
+        async function handleIceCandidate(candidate) {
+            try {
+                if (!peerConnection) {
+                    return;
+                }
+                
+                if (peerConnection.remoteDescription) {
+                    try {
+                        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                    } catch (error) {
+                        // Откладываем кандидат при ошибках состояния
+                        if (error.message.includes('InvalidStateError') || error.message.includes('not ready')) {
+                            if (!peerConnection.pendingIceCandidates) {
+                                peerConnection.pendingIceCandidates = [];
+                            }
+                            peerConnection.pendingIceCandidates.push(candidate);
+                        }
+                    }
+                } else {
+                    // Сохраняем кандидата для добавления позже
+                    if (!peerConnection.pendingIceCandidates) {
+                        peerConnection.pendingIceCandidates = [];
+                    }
+                    peerConnection.pendingIceCandidates.push(candidate);
+                }
+            } catch (error) {
+                // Игнорируем ошибки обработки ICE кандидатов
+            }
+        }
+
+        function startStats() {
+            if (statsInterval) clearInterval(statsInterval);
+
+            statsInterval = setInterval(async () => {
+                if (peerConnection) {
+                    try {
+                        const stats = await peerConnection.getStats();
+                        stats.forEach(report => {
+                            if (report.type === 'inbound-rtp' && report.mediaType === 'video') {
+                                if (report.framesDecoded !== undefined) {
+                                    framesReceived = report.framesDecoded;
+                                    framesReceivedEl.textContent = framesReceived;
+                                }
+                                if (report.bytesReceived !== undefined) {
+                                    bytesReceived = report.bytesReceived;
+                                    const kb = Math.round(bytesReceived / 1024);
+                                    const mb = Math.round(bytesReceived / 1024 / 1024 * 10) / 10;
+                                    bytesReceivedEl.textContent = mb > 1 ? `${mb} MB` : `${kb} KB`;
+                                }
+                            }
+                        });
+                    } catch (error) {
+                        // Игнорируем ошибки статистики
+                    }
+                }
+            }, 1000);
+        }
+
+        function stopStats() {
+            if (statsInterval) {
+                clearInterval(statsInterval);
+                statsInterval = null;
+            }
+            framesReceived = 0;
+            bytesReceived = 0;
+            framesReceivedEl.textContent = '0';
+            bytesReceivedEl.textContent = '0 KB';
+        }
+
+        function disconnect() {
+            isManualDisconnect = true;
+            
+            // Отменяем переподключение
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+                reconnectTimeout = null;
+            }
+            reconnectAttempts = maxReconnectAttempts;
+            
+            // Очистка peerConnection
+            if (peerConnection) {
+                try {
+                    peerConnection.getTransceivers().forEach(transceiver => {
+                        if (transceiver.sender && transceiver.sender.track) {
+                            transceiver.sender.track.stop();
+                        }
+                        if (transceiver.receiver && transceiver.receiver.track) {
+                            transceiver.receiver.track.stop();
+                        }
+                    });
+                    peerConnection.close();
+                } catch (e) {
+                    // Игнорируем ошибки
+                }
+                peerConnection = null;
+            }
+
+            // Закрываем WebSocket
+            if (websocket && (websocket.readyState === WebSocket.OPEN || websocket.readyState === WebSocket.CONNECTING)) {
+                try {
+                    websocket.close(1000, 'Manual disconnect');
+                } catch (e) {
+                    // Игнорируем ошибки
+                }
+                websocket = null;
+            }
+
+            stopStats();
+
+            // Очищаем видео элемент
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+            
+            isPlaying = false;
+            if (playPromise) {
+                playPromise.catch(() => {});
+                playPromise = null;
+            }
+            
+            updateStatus('Отключено', 'disconnected');
+            updateVideoOverlay('Нет потока', false);
+            document.getElementById('serverUrl').disabled = false;
+            connectBtn.disabled = false;
+            disconnectBtn.disabled = true;
+            connectionStateEl.textContent = '-';
+            iceStateEl.textContent = '-';
+            clientId = null;
+            
+            log('Отключено', 'info');
+        }
+
+        // Обработка событий видео
+        video.onloadedmetadata = () => {
+            if (video.videoWidth > 0 && video.videoHeight > 0) {
+                updateVideoOverlay('Поток активен', true);
+            }
+        };
+
+        video.oncanplay = () => {
+            if (video.paused && !isPlaying) {
+                if (playPromise) {
+                    playPromise.catch(() => {});
+                }
+                playPromise = video.play();
+                playPromise.then(() => {
+                    isPlaying = true;
+                    playPromise = null;
+                }).catch(err => {
+                    if (!err.message.includes('interrupted by a new load request')) {
+                        log(`Ошибка воспроизведения: ${err.message}`, 'error');
+                    }
+                    isPlaying = false;
+                    playPromise = null;
+                });
+            }
+        };
+
+        video.onplay = () => {
+            isPlaying = true;
+            updateVideoOverlay('Поток активен', true);
+        };
+
+        video.onplaying = () => {
+            updateVideoOverlay('Поток активен', true);
+        };
+
+        video.onpause = () => {
+            isPlaying = false;
+        };
+
+        video.onwaiting = () => {
+            // Включаем треки при ожидании данных
+            if (video.srcObject) {
+                video.srcObject.getVideoTracks().forEach(track => {
+                    if (!track.enabled || track.muted) {
+                        track.enabled = true;
+                    }
+                });
+            }
+        };
+
+        video.onstalled = () => {
+            log('Видео остановилось (stalled)', 'error');
+        };
+
+        video.onerror = (error) => {
+            log(`Ошибка видео: ${error.message || 'Неизвестная ошибка'}`, 'error');
+            console.error('Video error:', error);
+            updateVideoOverlay('Ошибка воспроизведения', false);
+        };
+
+        // Проверка состояния треков (для отладки)
+        function checkTracksStatus() {
+            // Функция оставлена для возможной отладки, но не используется активно
+        }
+
+        log('Клиент готов. Нажмите "Подключиться" для начала просмотра', 'info');
+    </script>
+</body>
+</html>
