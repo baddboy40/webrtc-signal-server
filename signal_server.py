@@ -319,9 +319,15 @@ async def handle_client(websocket):
                     }))
                     logger.info(f"ICE candidate forwarded from {sender_id} to {target_id}")
                 
-                elif msg_type == 'list-clients':
+                elif msg_type in ('list-clients', 'get-clients'):
                     # Список всех подключенных клиентов
-                    client_list = [cid for cid in clients.keys() if cid != client_id]
+                    # get-clients — алиас для совместимости
+                    sender_id = None
+                    for cid, ws in clients.items():
+                        if ws == websocket:
+                            sender_id = cid
+                            break
+                    client_list = [cid for cid in clients.keys() if sender_id is None or cid != sender_id]
                     await websocket.send(json.dumps({
                         'type': 'client-list',
                         'clients': client_list
