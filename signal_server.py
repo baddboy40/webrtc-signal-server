@@ -7,7 +7,7 @@
 import asyncio
 import json
 import logging
-from typing import Dict, Set
+from typing import Dict, Set, Optional
 try:
     # Новая версия websockets (14.0+)
     from websockets.asyncio.server import serve
@@ -62,8 +62,26 @@ logging.getLogger('websockets.streams').setLevel(logging.CRITICAL)
 
 # Хранилище подключенных клиентов
 clients: Dict[str, 'WebSocket'] = {}
-# Ожидающие пары для соединения
-waiting_pairs: Set[str] = set()
+# Комнаты: room_id -> множество client_id
+rooms: Dict[str, Set[str]] = {}
+# Клиент -> комната (для быстрой проверки)
+client_rooms: Dict[str, str] = {}
+
+
+def _client_in_room(client_id: str) -> Optional[str]:
+    """Возвращает room_id клиента или None."""
+    return client_rooms.get(client_id)
+
+
+def _same_room_or_no_room(sender_id: str, target_id: str) -> bool:
+    """True если можно переслать (оба в одной комнате или оба без комнаты)."""
+    sr = _client_in_room(sender_id)
+    tr = _client_in_room(target_id)
+    if sr is None and tr is None:
+        return True
+    if sr is None or tr is None:
+        return False
+    return sr == tr
 
 
 async def handle_client(websocket):
@@ -87,12 +105,11 @@ async def handle_client(websocket):
                         client_id = f"client_{id(websocket)}"
                     
                     if client_id in clients:
-                        await websocket.send(json.dumps({
-                            'type': 'error',
-                            'message': f'Client {client_id} already exists'
-                        }))
-                        continue
-                    
+                        try:
+                            await clients[client_id].close()
+                        except Exception:
+                            pass
+                        logger.info(f"Replacing connection for client: {client_id}")
                     clients[client_id] = websocket
                     logger.info(f"Client registered: {client_id}")
                     
@@ -101,48 +118,116 @@ async def handle_client(websocket):
                         'client_id': client_id
                     }))
                 
-                elif msg_type == 'offer':
-                    # Получен offer от клиента
-                    # Находим client_id по websocket соединению
+                elif msg_type == 'join_room':
+                    room_id = data.get('room_id')
+                    if not room_id:
+                        await websocket.send(json.dumps({
+                            'type': 'error',
+                            'message': 'Missing room_id'
+                        }))
+                        continue
                     sender_id = None
                     for cid, ws in clients.items():
                         if ws == websocket:
                             sender_id = cid
                             break
-                    
                     if not sender_id:
                         await websocket.send(json.dumps({
                             'type': 'error',
                             'message': 'Client not registered. Please register first.'
                         }))
                         continue
-                    
-                    target_id = data.get('target_id')
-                    offer = data.get('offer')
-                    
-                    if not target_id or not offer:
-                        await websocket.send(json.dumps({
-                            'type': 'error',
-                            'message': 'Missing target_id or offer'
-                        }))
-                        continue
-                    
-                    if target_id not in clients:
-                        await websocket.send(json.dumps({
-                            'type': 'error',
-                            'message': f'Target client {target_id} not found'
-                        }))
-                        continue
-                    
-                    # Отправляем offer целевому клиенту
-                    target_ws = clients[target_id]
-                    await target_ws.send(json.dumps({
-                        'type': 'offer',
-                        'offer': offer,
-                        'from': sender_id
+                    if room_id not in rooms:
+                        rooms[room_id] = set()
+                    if sender_id in client_rooms:
+                        old_room = client_rooms[sender_id]
+                        rooms[old_room].discard(sender_id)
+                        if not rooms[old_room]:
+                            del rooms[old_room]
+                    rooms[room_id].add(sender_id)
+                    client_rooms[sender_id] = room_id
+                    logger.info(f"Client {sender_id} joined room {room_id}")
+                    await websocket.send(json.dumps({
+                        'type': 'room_joined',
+                        'room_id': room_id,
+                        'client_id': sender_id
                     }))
-                    
-                    logger.info(f"Offer forwarded from {sender_id} to {target_id}")
+                
+                elif msg_type == 'leave_room':
+                    room_id = data.get('room_id')
+                    sender_id = None
+                    for cid, ws in clients.items():
+                        if ws == websocket:
+                            sender_id = cid
+                            break
+                    if not sender_id:
+                        continue
+                    if sender_id in client_rooms and client_rooms[sender_id] == room_id:
+                        rooms[room_id].discard(sender_id)
+                        del client_rooms[sender_id]
+                        if not rooms[room_id]:
+                            del rooms[room_id]
+                        logger.info(f"Client {sender_id} left room {room_id}")
+                        await websocket.send(json.dumps({
+                            'type': 'room_left',
+                            'room_id': room_id
+                        }))
+                
+                elif msg_type == 'offer':
+                    sender_id = None
+                    for cid, ws in clients.items():
+                        if ws == websocket:
+                            sender_id = cid
+                            break
+                    if not sender_id:
+                        await websocket.send(json.dumps({
+                            'type': 'error',
+                            'message': 'Client not registered. Please register first.'
+                        }))
+                        continue
+                    offer = data.get('offer')
+                    if not offer:
+                        await websocket.send(json.dumps({
+                            'type': 'error',
+                            'message': 'Missing offer'
+                        }))
+                        continue
+                    room_id = data.get('room_id')
+                    target_id = data.get('target_id')
+                    msg = {'type': 'offer', 'offer': offer, 'from': sender_id}
+                    if room_id:
+                        if room_id not in rooms or sender_id not in rooms[room_id]:
+                            await websocket.send(json.dumps({
+                                'type': 'error',
+                                'message': f'Sender not in room {room_id}'
+                            }))
+                            continue
+                        sent = 0
+                        for cid in rooms[room_id]:
+                            if cid != sender_id and cid in clients:
+                                await clients[cid].send(json.dumps(msg))
+                                sent += 1
+                        logger.info(f"Offer broadcast from {sender_id} to room {room_id} ({sent} clients)")
+                    elif target_id:
+                        if target_id not in clients:
+                            await websocket.send(json.dumps({
+                                'type': 'error',
+                                'message': f'Target client {target_id} not found'
+                            }))
+                            continue
+                        if not _same_room_or_no_room(sender_id, target_id):
+                            await websocket.send(json.dumps({
+                                'type': 'error',
+                                'message': f'Target {target_id} not in the same room'
+                            }))
+                            continue
+                        await clients[target_id].send(json.dumps(msg))
+                        logger.info(f"Offer forwarded from {sender_id} to {target_id}")
+                    else:
+                        await websocket.send(json.dumps({
+                            'type': 'error',
+                            'message': 'Missing room_id or target_id'
+                        }))
                 
                 elif msg_type == 'answer':
                     # Получен answer от клиента
@@ -176,15 +261,17 @@ async def handle_client(websocket):
                             'message': f'Target client {target_id} not found'
                         }))
                         continue
-                    
-                    # Отправляем answer целевому клиенту
-                    target_ws = clients[target_id]
-                    await target_ws.send(json.dumps({
+                    if not _same_room_or_no_room(sender_id, target_id):
+                        await websocket.send(json.dumps({
+                            'type': 'error',
+                            'message': f'Target {target_id} not in the same room'
+                        }))
+                        continue
+                    await clients[target_id].send(json.dumps({
                         'type': 'answer',
                         'answer': answer,
                         'from': sender_id
                     }))
-                    
                     logger.info(f"Answer forwarded from {sender_id} to {target_id}")
                 
                 elif msg_type == 'ice-candidate':
@@ -219,15 +306,17 @@ async def handle_client(websocket):
                             'message': f'Target client {target_id} not found'
                         }))
                         continue
-                    
-                    # Отправляем ICE кандидат целевому клиенту
-                    target_ws = clients[target_id]
-                    await target_ws.send(json.dumps({
+                    if not _same_room_or_no_room(sender_id, target_id):
+                        await websocket.send(json.dumps({
+                            'type': 'error',
+                            'message': f'Target {target_id} not in the same room'
+                        }))
+                        continue
+                    await clients[target_id].send(json.dumps({
                         'type': 'ice-candidate',
                         'candidate': candidate,
                         'from': sender_id
                     }))
-                    
                     logger.info(f"ICE candidate forwarded from {sender_id} to {target_id}")
                 
                 elif msg_type == 'list-clients':
@@ -265,9 +354,14 @@ async def handle_client(websocket):
         if not any(keyword in error_msg for keyword in ["invalid message", "http request", "eof", "connection closed", "handshake"]):
             logger.error(f"Connection error: {e}", exc_info=True)
     finally:
-        # Удаляем клиента при отключении
-        if client_id and client_id in clients:
+        if client_id and client_id in clients and clients[client_id] == websocket:
             del clients[client_id]
+            if client_id in client_rooms:
+                room_id = client_rooms[client_id]
+                rooms[room_id].discard(client_id)
+                if not rooms[room_id]:
+                    del rooms[room_id]
+                del client_rooms[client_id]
             logger.info(f"Client removed: {client_id}")
 
 
